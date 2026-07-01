@@ -59,7 +59,9 @@ with tab1:
             member = st.selectbox("팀원 선택", ["부장님", "팀원1", "팀원2", "팀원3", "팀원4"])
             
             today = datetime.date.today()
-            month_str = st.text_input("해당 월 (YYYY-MM 형식)", value=today.strftime("%Y-%m"))
+            
+            # 💡 수정: st.text_input에서 st.date_input(달력 형태)으로 변경
+            selected_date = st.date_input("결제 일자", value=today)
             
             category = st.selectbox("예산 항목", ["수선유지비", "비품", "개량공사"])
             amount = st.number_input("사용 금액 (원)", min_value=0, step=1000)
@@ -69,7 +71,8 @@ with tab1:
             if submitted:
                 new_data = {
                     "id": int(datetime.datetime.now().timestamp() * 1000),
-                    "month": month_str,
+                    # 💡 수정된 부분: 달력에서 선택한 날짜를 YYYY-MM-DD 형식의 문자열로 저장
+                    "month": selected_date.strftime("%Y-%m-%d"),
                     "member": member,
                     "category": category,
                     "amount": amount
@@ -143,8 +146,11 @@ with tab2:
         # 피벗 테이블 영역
         st.markdown("##### 📅 월별/항목별 요약 테이블 (취합본)")
         try:
-            # Pandas를 이용해 월별-항목별 피벗 테이블 생성
-            pivot_df = pd.pivot_table(df, values='amount', index='month', columns='category', aggfunc='sum', fill_value=0)
+            # 💡 수정된 부분: 'YYYY-MM-DD' 형식에서 앞 7자리('YYYY-MM')만 잘라서 'month_group'이라는 새로운 열 생성
+            df['month_group'] = df['month'].astype(str).str[:7]
+            
+            # 💡 수정된 부분: 피벗 테이블 생성 시 기준(index)을 'month'가 아닌 'month_group'으로 변경
+            pivot_df = pd.pivot_table(df, values='amount', index='month_group', columns='category', aggfunc='sum', fill_value=0)
             
             # 없는 카테고리 열 추가 보장
             for cat in ["수선유지비", "비품", "개량공사"]:
