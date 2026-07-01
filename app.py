@@ -6,7 +6,6 @@ import plotly.express as px
 
 # =====================================================================
 # [설정] 복사한 구글 Apps Script 웹 앱 URL을 아래에 입력하세요.
-# 예시: "https://script.google.com/macros/s/AKfycb.../exec"
 # =====================================================================
 APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxqV2D3xJocojGOJargIr5ASgst1O-ET8JDZFv-sTuANEDEeYLhxDmRBy0Vaz3xN__cQQ/exec"
 
@@ -30,17 +29,39 @@ def load_data():
         st.error(f"데이터를 불러오는 중 오류가 발생했습니다: {e}")
         return pd.DataFrame(columns=['id', 'month', 'member', 'category', 'amount', 'timestamp'])
 
+# 💡 디버깅 기능이 강화되고 버그가 방지된 save_data 함수
 def save_data(data):
     if "YOUR_APPS_SCRIPT" in APPS_SCRIPT_URL or not APPS_SCRIPT_URL.startswith("http"):
         st.warning("먼저 소스 코드 상단의 APPS_SCRIPT_URL을 설정해주세요.")
         return False
     try:
-        response = requests.post(APPS_SCRIPT_URL, json=data)
-        if response.status_code == 200 and response.json().get('status') == 'success':
-            return True
-        return False
+        # 1. 구글 302 리다이렉트 버그를 막기 위해 allow_redirects=False 로 설정
+        response = requests.post(APPS_SCRIPT_URL, json=data, allow_redirects=False)
+        
+        # 2. 구글이 리다이렉트 주소를 주면, 헤더를 깨끗하게 비운 GET 요청으로 수동 이동
+        if response.status_code == 302:
+            redirect_url = response.headers.get('Location')
+            response = requests.get(redirect_url)
+            
+        if response.status_code == 200:
+            try:
+                res_json = response.json()
+                if res_json.get('status') == 'success':
+                    return True
+            except Exception:
+                # JSON 파싱 실패 시 구글이 보낸 에러 화면(HTML)을 그대로 노출합니다.
+                st.error("💡 구글 스크립트 실행 중 에러가 발생했습니다. 아래 메시지를 확인하세요:")
+                st.code(response.text[:1000], language="html")
+                return False
+        else:
+            st.error(f"구글 서버 연결 실패 (상태 코드: {response.status_code})")
+            return False
+            
     except Exception as e:
-        st.error(f"데이터 저장 중 오류가 발생했습니다: {e}")
+        st.error(f"데이터 저장 중 네트워크 오류가 발생했습니다: {e}")
+        if 'response' in locals():
+            st.error("구글 서버 응답 내용:")
+            st.code(response.text[:500])
         return False
 
 # --- UI 레이아웃 ---
@@ -59,8 +80,6 @@ with tab1:
             member = st.selectbox("팀원 선택", ["부장님", "팀원1", "팀원2", "팀원3", "팀원4"])
             
             today = datetime.date.today()
-            
-            # 💡 수정: st.text_input에서 st.date_input(달력 형태)으로 변경
             selected_date = st.date_input("결제 일자", value=today)
             
             category = st.selectbox("예산 항목", ["수선유지비", "비품", "개량공사"])
@@ -71,7 +90,6 @@ with tab1:
             if submitted:
                 new_data = {
                     "id": int(datetime.datetime.now().timestamp() * 1000),
-                    # 💡 수정된 부분: 달력에서 선택한 날짜를 YYYY-MM-DD 형식의 문자열로 저장
                     "month": selected_date.strftime("%Y-%m-%d"),
                     "member": member,
                     "category": category,
@@ -80,16 +98,14 @@ with tab1:
                 with st.spinner("구글 시트에 저장 중..."):
                     if save_data(new_data):
                         st.success("예산 데이터가 정상적으로 기록되었습니다.")
-                        st.cache_data.clear() # 새 데이터 반영을 위해 캐시 삭제
+                        st.cache_data.clear() 
                         st.rerun()
 
     with col2:
         st.subheader("📂 최근 입력 내역 (구글 시트 연동)")
         df = load_data()
         if not df.empty:
-            # 표시용으로 데이터 가공 (id, timestamp 숨김, 최신순 정렬)
             display_df = df.sort_values(by='id', ascending=False).drop(columns=['id', 'timestamp'], errors='ignore')
-            # 숫자 포맷 변경
             styled_df = display_df.style.format({"amount": "{:,.0f}원"})
             st.dataframe(styled_df, use_container_width=True, hide_index=True)
         else:
@@ -104,10 +120,8 @@ with tab2:
     if df.empty:
         st.info("대시보드를 표시할 데이터가 없습니다.")
     else:
-        # 요약 지표 (KPI)
         total_amount = df['amount'].sum()
         
-        # 이번 달 최대 사용 항목 계산
         cat_group = df.groupby('category')['amount'].sum()
         top_category = cat_group.idxmax() if not cat_group.empty else "-"
         top_category_val = cat_group.max() if not cat_group.empty else 0
@@ -121,7 +135,6 @@ with tab2:
         
         st.divider()
         
-        # 차트 영역
         chart_col1, chart_col2 = st.columns(2)
         
         with chart_col1:
@@ -143,24 +156,16 @@ with tab2:
             
         st.divider()
         
-        # 피벗 테이블 영역
         st.markdown("##### 📅 월별/항목별 요약 테이블 (취합본)")
         try:
-            # 💡 수정된 부분: 'YYYY-MM-DD' 형식에서 앞 7자리('YYYY-MM')만 잘라서 'month_group'이라는 새로운 열 생성
             df['month_group'] = df['month'].astype(str).str[:7]
-            
-            # 💡 수정된 부분: 피벗 테이블 생성 시 기준(index)을 'month'가 아닌 'month_group'으로 변경
             pivot_df = pd.pivot_table(df, values='amount', index='month_group', columns='category', aggfunc='sum', fill_value=0)
             
-            # 없는 카테고리 열 추가 보장
             for cat in ["수선유지비", "비품", "개량공사"]:
                 if cat not in pivot_df.columns:
                     pivot_df[cat] = 0
                     
-            # 행별 총합 추가
             pivot_df['월간 총합'] = pivot_df.sum(axis=1)
-            
-            # 최신 월이 위로 오도록 정렬
             pivot_df = pivot_df.sort_index(ascending=False)
             
             st.dataframe(
